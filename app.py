@@ -126,6 +126,8 @@ with st.sidebar:
             "Visão Geral",
             "Consulta de Pesquisa",
             "Análise por Idioma",
+            "Esquecimento",
+            "Revisões",
         ]
     )
     st.divider()
@@ -183,8 +185,7 @@ elif pagina == "Consulta de Pesquisa":
     pergunta = st.selectbox("Selecione a Pergunta Analítica", [
         "Como o tempo sem prática afeta a retenção?",
         "Mais revisões melhoram o recall?",
-        "Quais palavras são mais difíceis de aprender?",
-        "Quais classes gramaticais geram mais erros?"
+        "Quais palavras são mais difíceis de aprender?"
     ])
     idioma = st.selectbox("Idioma", ["Todos"] + idiomas)
 
@@ -257,29 +258,6 @@ elif pagina == "Consulta de Pesquisa":
         else:
             st.warning("Dados não encontrados para o filtro selecionado.")
 
-    elif pergunta == "Quais classes gramaticais geram mais erros?":
-        explicacao_grafico(
-            "Distribuição de Erro por Gramática",
-            "Este gráfico de pizza mostra a proporção de erros concentrada por categoria gramatical (ex: Verbos, Substantivos, Adjetivos). A fatia maior indica qual tipo de palavra mais confunde os alunos."
-        )
-        df = filtrar_idioma(words, idioma) if idioma != "Todos" else words
-        recall_col = obter_recall_col(df)
-
-        if not df.empty and "classe_gramatical" in df.columns and recall_col:
-            res = df.groupby("classe_gramatical", as_index=False)[recall_col].mean()
-            res["taxa_erro"] = 1 - res[recall_col]
-            res = res.sort_values("taxa_erro", ascending=False)
-
-            fig = px.pie(
-                res, names="classe_gramatical", values="taxa_erro",
-                title=f"Concentração de Erros por Categoria Gramatical — {idioma}",
-                hole=0.4, template="plotly_dark", color_discrete_sequence=px.colors.qualitative.Pastel
-            )
-            fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)')
-            st.plotly_chart(fig, width="stretch")
-        else:
-            st.warning("Dados não encontrados para o filtro selecionado.")
-
 # --- ANÁLISE POR IDIOMA ---
 elif pagina == "Análise por Idioma":
     cabecalho("Análise por Idioma", "Desempenho comparativo e detalhado do idioma selecionado.")
@@ -305,6 +283,271 @@ elif pagina == "Análise por Idioma":
                          title=f"Top {len(top_crit)} Palavras com Menor Retenção em {idioma}")
             fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', xaxis_tickformat='.0%', yaxis={'categoryorder': 'total descending'})
             st.plotly_chart(fig, width="stretch")
+
+# --- ESQUECIMENTO ---
+elif pagina == "Esquecimento":
+    cabecalho(
+        "Análise e Diagnóstico de Esquecimento",
+        "Mapeamento da perda de retenção ao longo do tempo e identificação de conteúdos em estado crítico."
+    )
+
+    explicacao_grafico(
+        "Diagnóstico da Curva do Esquecimento",
+        "O heatmap apresenta a relação entre o tempo sem prática e o número de exposições anteriores. "
+        "Células com menor recall representam maior risco de esquecimento e indicam conteúdos "
+        "que podem necessitar de revisão."
+    )
+
+    c_esq1, c_esq2 = st.columns(2)
+
+    with c_esq1:
+        idioma = st.selectbox(
+            "Idioma para análise",
+            ["Todos"] + idiomas,
+            key="esq_lang"
+        )
+
+
+    df = (
+        filtrar_idioma(curve, idioma)
+        if idioma != "Todos"
+        else curve.copy()
+    )
+
+    lag_col = obter_coluna(
+        df,
+        [
+            "lag_bin",
+            "lag_days",
+            "avg_lag_days"
+        ]
+    )
+
+    exp_col = obter_coluna(
+        df,
+        [
+            "practice_bin",
+            "avg_prior_exposures",
+            "prior_exposures"
+        ]
+    )
+
+    recall_col = obter_recall_col(df)
+
+    if not df.empty and lag_col and exp_col and recall_col:
+
+        ordem_lag = [
+            "<1 hour",
+            "1-6 hours",
+            "6-24 hours",
+            "1-3 days",
+            "3-7 days",
+            "1-2 weeks",
+            "2-4 weeks",
+            "1-3 months",
+            "3+ months"
+        ]
+
+        ordem_exposicoes = [
+            "1-2 exposures",
+            "3-4 exposures",
+            "5-9 exposures",
+            "10-19 exposures",
+            "20+ exposures"
+        ]
+
+        df[lag_col] = pd.Categorical(
+            df[lag_col],
+            categories=ordem_lag,
+            ordered=True
+        )
+
+        df[exp_col] = pd.Categorical(
+            df[exp_col],
+            categories=ordem_exposicoes,
+            ordered=True
+        )
+
+        pivot_df = df.pivot_table(
+            index=exp_col,
+            columns=lag_col,
+            values=recall_col,
+            aggfunc="mean",
+            observed=False
+        )
+
+   
+        pivot_df = pivot_df.reindex(
+            index=ordem_exposicoes,
+            columns=ordem_lag
+        )
+
+        valores_recall = pivot_df.values.flatten()
+        valores_recall = valores_recall[
+            ~pd.isna(valores_recall)
+        ]
+
+
+        secao(
+            "Matriz de Esquecimento",
+            "Relação entre tempo sem prática, exposições anteriores e retenção."
+        )
+
+        fig = px.imshow(
+            pivot_df,
+            labels=dict(
+                x="Intervalo sem Prática",
+                y="Faixa de Exposições",
+                color="Recall"
+            ),
+            x=pivot_df.columns,
+            y=pivot_df.index,
+            color_continuous_scale="Viridis",
+            template="plotly_dark",
+            aspect="auto",
+            text_auto=".1%"
+        )
+
+        fig.update_layout(
+            paper_bgcolor="rgba(0,0,0,0)",
+            plot_bgcolor="rgba(0,0,0,0)",
+            title=f"Heatmap de Retenção — {idioma}",
+            xaxis_title="Intervalo sem Prática",
+            yaxis_title="Faixa de Exposições"
+        )
+
+        fig.update_coloraxes(
+            colorbar_tickformat=".0%",
+            colorbar_title="Recall"
+        )
+
+        st.plotly_chart(
+            fig,
+            width="stretch"
+        )
+
+        render_html(
+            f"""
+            <div class="insight-card insight-purple">
+                <div class="insight-title">
+                </div>
+
+                <div class="insight-text">
+                    As células representam a taxa média de recall para cada
+                    combinação entre tempo sem prática e quantidade de
+                    exposições anteriores.
+                    <br><br>
+
+                    <b>Recall mais alto</b> indica maior retenção.
+                    <br>
+
+                    <b>Recall mais baixo</b> indica maior risco de esquecimento.
+                    <br><br>
+
+                    O limite crítico configurado pelo sistema é de
+                    <b>{limite_critico * 100:.0f}%</b>.
+                    A meta global de retenção é de
+                    <b>{meta_recall * 100:.0f}%</b>.
+                </div>
+            </div>
+            """
+        )
+
+
+    else:
+
+        st.info(
+            "Registros insuficientes para formar a Matriz de Esquecimento neste filtro."
+        )
+
+# --- REVISÕES ---
+elif pagina == "Revisões":
+    cabecalho(
+        "Análise Avançada de Revisões",
+        "Comportamento da retenção sob diferentes frequências de repetição."
+    )
+
+    explicacao_grafico(
+        "Curva de Aprendizado por Prática",
+        "A análise mostra como a retenção varia conforme aumenta "
+        "o número de exposições anteriores ao conteúdo."
+    )
+
+    idioma = st.selectbox(
+        "Idioma",
+        ["Todos"] + idiomas,
+        key="rev_lang"
+    )
+
+    df = (
+        filtrar_idioma(curve, idioma)
+        if idioma != "Todos"
+        else curve.copy()
+    )
+
+    exp_col = obter_coluna(
+        df,
+        ["practice_bin", "avg_prior_exposures", "prior_exposures"]
+    )
+
+    recall_col = obter_recall_col(df)
+
+    if not df.empty and exp_col and recall_col:
+
+        ordem_exposicoes = [
+            "1-2 exposures",
+            "3-4 exposures",
+            "5-9 exposures",
+            "10-19 exposures",
+            "20+ exposures"
+        ]
+
+        df[exp_col] = pd.Categorical(
+            df[exp_col],
+            categories=ordem_exposicoes,
+            ordered=True
+        )
+
+        res = df.groupby(
+            exp_col,
+            as_index=False,
+            observed=False
+        )[recall_col].mean()
+
+        res = res.sort_values(exp_col)
+
+        fig = px.line(
+            res,
+            x=exp_col,
+            y=recall_col,
+            markers=True,
+            text=res[recall_col].map(lambda x: f"{x:.1%}"),
+            title=f"Evolução da Retenção por Histórico de Treino — {idioma}",
+            template="plotly_dark"
+        )
+
+        fig.update_traces(
+            line=dict(width=3),
+            marker=dict(size=10)
+        )
+
+        fig.update_layout(
+            xaxis_title="Faixa de Prática / Exposições",
+            yaxis_title="Recall Médio",
+            yaxis_tickformat=".0%",
+            paper_bgcolor="rgba(0,0,0,0)",
+            plot_bgcolor="rgba(0,0,0,0)"
+        )
+
+        st.plotly_chart(
+            fig,
+            width="stretch"
+        )
+
+    else:
+        st.info(
+            "Registros insuficientes para a Análise de Revisões neste filtro."
+        )
 
 
 render_html("""
