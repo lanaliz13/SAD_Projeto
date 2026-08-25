@@ -128,6 +128,8 @@ with st.sidebar:
             "Análise por Idioma",
             "Esquecimento",
             "Revisões",
+            "Dificuldades",
+            "Decisões",
         ]
     )
     st.divider()
@@ -549,6 +551,203 @@ elif pagina == "Revisões":
             "Registros insuficientes para a Análise de Revisões neste filtro."
         )
 
+# --- DIFICULDADES ---
+elif pagina == "Dificuldades":
+    cabecalho("Mapeamento de Dificuldades", "Ranking de palavras que apresentam a maior taxa de erro dos alunos.")
+
+    explicacao_grafico(
+        "Mapeamento do Vocabulário Crítico",
+        "Em vez de pontos amontoados, este gráfico lista de forma simples as palavras com maior taxa de erro (100% - taxa de acerto). A linha pontilhada indica o limite crítico tolerável de erro."
+    )
+
+    idioma = st.selectbox("Idioma", ["Todos"] + idiomas)
+    df = filtrar_idioma(words, idioma) if idioma != "Todos" else words
+
+    palavra_col = obter_nome_palavra(df)
+    recall_col = obter_recall_col(df)
+
+    if not df.empty and palavra_col and recall_col:
+        df["taxa_erro"] = 1 - df[recall_col]
+        df_plot = df.sort_values("taxa_erro", ascending=False).head(quantidade_prioridades).copy()
+
+        fig = px.bar(
+            df_plot,
+            x="taxa_erro",
+            y=palavra_col,
+            orientation='h',
+            text_auto='.1%',
+            color="taxa_erro",
+            color_continuous_scale="Reds",
+            title=f"Top {len(df_plot)} Palavras com Maior Taxa de Erro — {idioma}",
+            template="plotly_dark"
+        )
+        fig.add_vline(x=1 - limite_critico, line_dash="dot", line_color="#fb7185", annotation_text="Limite Crítico de Erro")
+        fig.update_layout(
+            paper_bgcolor='rgba(0,0,0,0)',
+            plot_bgcolor='rgba(0,0,0,0)',
+            xaxis_title="Taxa de Erro Estimada",
+            yaxis_title="Palavra",
+            xaxis_tickformat='.0%',
+            yaxis={'categoryorder': 'total ascending'}
+        )
+        st.plotly_chart(fig, width="stretch")
+    else:
+        st.info("Dados de palavras indisponíveis para o idioma selecionado.")
+
+# --- DECISÕES ---
+elif pagina == "Decisões":
+
+    cabecalho(
+        "Decisões",
+        "Priorize os conteúdos que mais precisam de revisão."
+    )
+
+    col1, col2, col3 = st.columns(3)
+
+    with col1:
+        tempo_padrao = st.slider(
+            "Dias sem prática", 1, 60, 14, key="dec_tempo"
+        )
+
+    with col2:
+        exposicoes_padrao = st.slider(
+            "Exposições", 0, 20, 5, key="dec_exposicoes"
+        )
+
+    with col3:
+        idioma = st.selectbox(
+            "Idioma", ["Todos"] + idiomas, key="dec_idioma"
+        )
+
+    df_w = filtrar_idioma(words, idioma) if idioma != "Todos" else words
+
+    prio_df = calcular_prioridades_conteudos(
+        df_w,
+        tempo_padrao,
+        exposicoes_padrao
+    )
+
+    if prio_df.empty:
+        st.info("Não foi possível calcular as prioridades para o filtro selecionado.")
+    else:
+
+        # Distribuição das prioridades
+        counts = (
+            prio_df["prioridade"]
+            .value_counts()
+            .reindex(
+                ["Baixa", "Média", "Alta", "Crítica"],
+                fill_value=0
+            )
+            .reset_index()
+        )
+
+        counts.columns = ["Prioridade", "Quantidade"]
+
+        fig = px.pie(
+            counts,
+            names="Prioridade",
+            values="Quantidade",
+            title=f"Prioridade dos Conteúdos — {idioma}",
+            hole=0.5,
+            color="Prioridade",
+            color_discrete_map={
+                "Baixa": "#34d399",
+                "Média": "#f59e0b",
+                "Alta": "#fb7185",
+                "Crítica": "#ff4d67"
+            },
+            template="plotly_dark"
+        )
+
+        fig.update_layout(
+            paper_bgcolor="rgba(0,0,0,0)",
+            plot_bgcolor="rgba(0,0,0,0)",
+            margin=dict(l=20, r=20, t=50, b=20)
+        )
+
+        st.plotly_chart(fig, width="stretch")
+
+        # Ranking
+        secao(
+            "Conteúdos Prioritários",
+            "Conteúdos com maior índice de prioridade."
+        )
+
+        palavra_col = obter_nome_palavra(prio_df)
+
+        if palavra_col:
+
+            ranking = (
+                prio_df
+                .sort_values("indice_prioridade", ascending=False)
+                .head(quantidade_prioridades)
+                .copy()
+            )
+
+            tabela = ranking[
+                [
+                    palavra_col,
+                    "recall_utilizado",
+                    "indice_prioridade",
+                    "prioridade"
+                ]
+            ].copy()
+
+            tabela["recall_utilizado"] = (
+                tabela["recall_utilizado"] * 100
+            ).round(1).astype(str) + "%"
+
+            tabela["indice_prioridade"] = (
+                tabela["indice_prioridade"].round(1)
+            )
+
+            tabela.columns = [
+                "Palavra",
+                "Recall",
+                "Índice",
+                "Prioridade"
+            ]
+
+            st.dataframe(
+                tabela,
+                width="stretch",
+                hide_index=True
+            )
+
+        # Decisão
+        critica = (prio_df["prioridade"] == "Crítica").sum()
+        alta = (prio_df["prioridade"] == "Alta").sum()
+        media = (prio_df["prioridade"] == "Média").sum()
+
+        secao("Decisão Recomendada")
+
+        if critica > 0:
+            mensagem = f"Priorizar imediatamente os **{critica} conteúdos críticos**."
+            cor = "red"
+
+        elif alta > 0:
+            mensagem = f"Programar a revisão dos **{alta} conteúdos de alta prioridade**."
+            cor = "orange"
+
+        elif media > 0:
+            mensagem = f"Manter acompanhamento dos **{media} conteúdos de prioridade média**."
+            cor = "purple"
+
+        else:
+            mensagem = "Não foram identificados conteúdos com prioridade alta ou crítica."
+            cor = "green"
+
+        render_html(f"""
+            <div class="insight-card insight-{cor}">
+                <div class="insight-title">
+                    Direcionamento do SAD
+                </div>
+                <div class="insight-text">
+                    {mensagem}
+                </div>
+            </div>
+        """)
 
 render_html("""
     <div class="footer">
